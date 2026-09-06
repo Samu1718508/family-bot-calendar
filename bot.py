@@ -118,7 +118,7 @@ def cosa_buttare(giorni_da_oggi=0):
     if giorno_settimana == 1:
         rifiuti.append("carta")
         rifiuti.append("indifferenziata")
-    if giorno_settimana == 0 and settimana_pari:
+    if giorno_settimana == 0 and not settimana_pari:
         rifiuti.append("vetro")
     if giorno_settimana == 3:
         rifiuti.append("plastica")
