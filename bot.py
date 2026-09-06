@@ -133,26 +133,29 @@ def cosa_buttare_oggi():
 # ============================================
 # GESTIONE CHAT_ID E PASSWORD
 # ============================================
-def registra_chat_id(nome, chat_id):
+def registra_chat_id(nome, chat_id, nome_bot):
     with open(FILE_CHAT_IDS, "r") as f:
         chat_ids = json.load(f)
-    chat_ids[nome] = chat_id
+    chat_ids[nome] = {"chat_id": chat_id, "bot": nome_bot}
     with open(FILE_CHAT_IDS, "w") as f:
         json.dump(chat_ids, f, indent=2)
 
-def get_tutti_chat_ids():
+def get_tutti_con_bot():
     with open(FILE_CHAT_IDS, "r") as f:
         chat_ids = json.load(f)
-    return list(chat_ids.values())
+    return chat_ids
 
 def chat_id_autorizzato(chat_id):
     with open(FILE_CHAT_IDS, "r") as f:
         chat_ids = json.load(f)
-    return chat_id in chat_ids.values()
+    for persona, info in chat_ids.items():
+        if info["chat_id"] == chat_id:
+            return True
+    return False
 
 def prova_registrazione(messaggio, chat_id, nome_persona):
     if messaggio.strip() == PASSWORD_FAMIGLIA:
-        registra_chat_id(nome_persona, chat_id)
+        registra_chat_id(nome_persona, chat_id, nome_persona)
         return True
     return False
 
@@ -279,15 +282,21 @@ def salva_evento_singolo_calendar(persona, evento, data, ora, forza=False):
 def mostra_eventi_calendar():
     adesso = datetime.datetime.now() + datetime.timedelta(hours=2)
     tempo_min = adesso.isoformat() + 'Z'
+    tempo_max = (adesso + datetime.timedelta(days=14)).isoformat() + 'Z'
+
     eventi_result = servizio_calendar.events().list(
-        calendarId=ID_CALENDARIO, timeMin=tempo_min, maxResults=20,
-        singleEvents=True, orderBy='startTime'
+        calendarId=ID_CALENDARIO, timeMin=tempo_min, timeMax=tempo_max,
+        maxResults=20, singleEvents=True, orderBy='startTime'
     ).execute()
+
     eventi = eventi_result.get('items', [])
-    if not eventi:
-        return "Nessun evento in programma."
-    testo = "Prossimi eventi:\n"
-    for e in eventi:
+    eventi_singoli = [e for e in eventi if 'recurringEventId' not in e]
+
+    if not eventi_singoli:
+        return "Nessun evento singolo nei prossimi 14 giorni."
+
+    testo = "Prossimi eventi (prossimi 14 giorni):\n"
+    for e in eventi_singoli:
         inizio = e['start'].get('dateTime', e['start'].get('date'))
         testo += "- " + e['summary'] + " il " + inizio[:16].replace("T", " alle ") + "\n"
     return testo
@@ -432,7 +441,7 @@ tools = [
     {"name": "mostra_ricorrenti_familiari", "description": "Usa questo tool quando l utente vuole vedere tutti gli appuntamenti ricorrenti familiari", "input_schema": {"type": "object", "properties": {}, "required": []}},
     {"name": "cancella_ricorrente_familiare", "description": "Usa questo tool quando l utente vuole cancellare un appuntamento ricorrente familiare", "input_schema": {"type": "object", "properties": {"persona": {"type": "string"}, "attivita": {"type": "string"}}, "required": ["persona", "attivita"]}},
     {"name": "salva_evento_singolo", "description": "Usa questo tool quando l utente vuole salvare un evento specifico. Se il tool risponde con un AVVISO di sovrapposizione, chiedi conferma all utente prima di richiamarlo di nuovo con forza=true", "input_schema": {"type": "object", "properties": {"persona": {"type": "string", "description": "Nome della persona coinvolta"}, "evento": {"type": "string", "description": "Descrizione dell evento"}, "data": {"type": "string", "description": "Data in formato YYYY-MM-DD"}, "ora": {"type": "string", "description": "Ora in formato HH:MM"}, "forza": {"type": "boolean", "description": "Metti true solo se l utente ha gia confermato di voler salvare nonostante il conflitto"}}, "required": ["persona", "evento", "data", "ora"]}},
-    {"name": "mostra_eventi_singoli", "description": "Usa questo tool quando l utente vuole vedere la lista dei prossimi eventi", "input_schema": {"type": "object", "properties": {}, "required": []}},
+    {"name": "mostra_eventi_singoli", "description": "Usa questo tool quando l utente vuole vedere la lista dei prossimi eventi singoli/occasionali (non ricorrenti) nei prossimi 14 giorni. Per gli appuntamenti fissi/ricorrenti usa invece mostra_ricorrenti_familiari", "input_schema": {"type": "object", "properties": {}, "required": []}},
     {"name": "cancella_evento_singolo", "description": "Usa questo tool quando l utente vuole cancellare un evento specifico", "input_schema": {"type": "object", "properties": {"evento": {"type": "string"}, "data": {"type": "string"}}, "required": ["evento", "data"]}},
     {"name": "mostra_tutto", "description": "Usa questo tool quando l utente chiede un riepilogo generale di tutto: rifiuti, appuntamenti ricorrenti ed eventi", "input_schema": {"type": "object", "properties": {}, "required": []}},
     {"name": "giorno_settimana_di", "description": "Usa questo tool per scoprire che giorno della settimana cade una data specifica. Usalo SEMPRE prima di salvare un evento per verificare che il giorno della settimana indicato dall utente sia corretto", "input_schema": {"type": "object", "properties": {"data": {"type": "string", "description": "Data in formato YYYY-MM-DD"}}, "required": ["data"]}},
@@ -464,7 +473,7 @@ def agente(messaggio, nome_utente="Utente"):
         risposta = client.messages.create(
             model="claude-sonnet-4-5",
             max_tokens=1024,
-            system="Sei l assistente della famiglia. Aiuti a gestire rifiuti, appuntamenti ricorrenti ed eventi singoli per Samuele, Anna, Cecilia e Chicco. Rispondi sempre in italiano, in modo chiaro e sintetico. Usa SEMPRE i tools disponibili quando servono. IMPORTANTE: quando l utente ti dice una data senza specificare l anno, usa SEMPRE PRIMA il tool data_oggi per sapere l anno corrente, poi calcola la data corretta nel futuro. Non usare mai anni dal tuo addestramento, usa sempre l anno reale attuale. Quando l utente specifica un giorno della settimana insieme a una data, usa SEMPRE il tool giorno_settimana_di per verificare che il giorno indicato sia corretto. Se non corrisponde, AVVISA l utente dell errore e chiedi conferma su quale sia la data giusta, non salvare automaticamente. Quando l utente vuole correggere un dettaglio di un evento esistente, usa SEMPRE modifica_evento_singolo invece di cancellare e ricreare. Se salva_evento_singolo ritorna un messaggio di AVVISO/conflitto, chiedi sempre conferma all utente prima di richiamare di nuovo il tool con forza=true. Non dire mai che non puoi fare qualcosa se hai un tool per farlo.",
+            system="Sei l assistente della famiglia. Aiuti a gestire rifiuti, appuntamenti ricorrenti ed eventi singoli per Samuele, Anna, Cecilia e Chicco. L utente che ti sta scrivendo in questo momento si chiama " + nome_utente + ". Se l utente usa parole come io, mio, mia, per me, senza specificare esplicitamente un altro nome, significa che si riferisce SE STESSO cioe " + nome_utente + ", quindi usa " + nome_utente + " come persona nei tool. Rispondi sempre in italiano, in modo chiaro e sintetico. Usa SEMPRE i tools disponibili quando servono. IMPORTANTE: quando l utente ti dice una data senza specificare l anno, usa SEMPRE PRIMA il tool data_oggi per sapere l anno corrente, poi calcola la data corretta nel futuro. Non usare mai anni dal tuo addestramento, usa sempre l anno reale attuale. Quando l utente specifica un giorno della settimana insieme a una data, usa SEMPRE il tool giorno_settimana_di per verificare che il giorno indicato sia corretto. Se non corrisponde, AVVISA l utente dell errore e chiedi conferma su quale sia la data giusta, non salvare automaticamente. Quando l utente vuole correggere un dettaglio di un evento esistente, usa SEMPRE modifica_evento_singolo invece di cancellare e ricreare. Se salva_evento_singolo ritorna un messaggio di AVVISO/conflitto, chiedi sempre conferma all utente prima di richiamare di nuovo il tool con forza=true. Non dire mai che non puoi fare qualcosa se hai un tool per farlo.",
             tools=tools,
             messages=conversazione
         )
@@ -541,7 +550,9 @@ def agente(messaggio, nome_utente="Utente"):
 # ============================================
 # ALERT AUTOMATICO RIFIUTI
 # ============================================
-async def controlla_alert_rifiuti(bot):
+bot_instances = {}  # mappa nome persona -> oggetto bot corrispondente
+
+async def controlla_alert_rifiuti():
     while True:
         try:
             with open(FILE_CONFIG_RIFIUTI, "r") as f:
@@ -560,11 +571,14 @@ async def controlla_alert_rifiuti(bot):
                     testo_rifiuti = ", ".join(rifiuti)
                     messaggio = "Promemoria rifiuti: oggi si butta " + testo_rifiuti + "!"
 
-                    for cid in get_tutti_chat_ids():
+                    chat_ids_info = get_tutti_con_bot()
+                    for persona, info in chat_ids_info.items():
                         try:
-                            await bot.send_message(chat_id=cid, text=messaggio)
+                            bot_da_usare = bot_instances.get(info["bot"])
+                            if bot_da_usare:
+                                await bot_da_usare.send_message(chat_id=info["chat_id"], text=messaggio)
                         except Exception as e:
-                            print("Errore invio alert rifiuti a", cid, ":", str(e))
+                            print("Errore invio alert rifiuti a", persona, ":", str(e))
 
                 config["ultimo_alert_inviato"] = oggi_str
                 with open(FILE_CONFIG_RIFIUTI, "w") as f:
@@ -578,13 +592,15 @@ async def controlla_alert_rifiuti(bot):
 # ============================================
 # DUE BOT TELEGRAM CON NOTIFICA INCROCIATA
 # ============================================
-async def notifica_tutti(testo, bot_mittente):
-    tutti_id = get_tutti_chat_ids()
-    for cid in tutti_id:
+async def notifica_tutti(testo, nome_mittente):
+    chat_ids_info = get_tutti_con_bot()
+    for persona, info in chat_ids_info.items():
         try:
-            await bot_mittente.send_message(chat_id=cid, text=testo)
+            bot_da_usare = bot_instances.get(info["bot"])
+            if bot_da_usare:
+                await bot_da_usare.send_message(chat_id=info["chat_id"], text=testo)
         except Exception as e:
-            print("Errore invio a", cid, ":", str(e))
+            print("Errore invio a", persona, ":", str(e))
 
 async def gestisci_messaggio(update: Update, context: ContextTypes.DEFAULT_TYPE, nome_bot):
     chat_id = update.effective_chat.id
@@ -602,7 +618,7 @@ async def gestisci_messaggio(update: Update, context: ContextTypes.DEFAULT_TYPE,
     parole_chiave_salvataggio = ["salvato", "modificato", "cancellato"]
     if any(parola in risposta_agente.lower() for parola in parole_chiave_salvataggio):
         messaggio_notifica = nome_bot + " ha fissato/modificato un appuntamento:\n" + risposta_agente
-        await notifica_tutti(messaggio_notifica, context.bot)
+        await notifica_tutti(messaggio_notifica, nome_bot)
     else:
         await update.message.reply_text(risposta_agente)
 
@@ -627,9 +643,12 @@ async def main():
     await app2.start()
     await app2.updater.start_polling(drop_pending_updates=True)
 
+    bot_instances["Anna"] = app1.bot
+    bot_instances["Samuele"] = app2.bot
+
     print("Entrambi i bot avviati!")
 
-    asyncio.ensure_future(controlla_alert_rifiuti(app1.bot))
+    asyncio.ensure_future(controlla_alert_rifiuti())
 
     while True:
         await asyncio.sleep(3600)
