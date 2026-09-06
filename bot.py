@@ -259,10 +259,10 @@ def salva_evento_singolo_calendar(persona, evento, data, ora, forza=False):
         conflitto = controlla_sovrapposizione(persona, data, ora)
         if conflitto:
             return conflitto
-    ora_inizio = datetime.datetime.strptime(ora, "%H:%M")
-    ora_fine = ora_inizio + datetime.timedelta(hours=1)
-    datetime_inizio = data + "T" + ora + ":00"
-    datetime_fine = data + "T" + ora_fine.strftime("%H:%M") + ":00"
+    datetime_inizio_obj = datetime.datetime.strptime(data + " " + ora, "%Y-%m-%d %H:%M")
+    datetime_fine_obj = datetime_inizio_obj + datetime.timedelta(hours=1)
+    datetime_inizio = datetime_inizio_obj.strftime("%Y-%m-%dT%H:%M:00")
+    datetime_fine = datetime_fine_obj.strftime("%Y-%m-%dT%H:%M:00")
     evento_calendar = {
         'summary': persona + ": " + evento,
         'description': 'Evento per ' + persona,
@@ -330,10 +330,10 @@ def modifica_evento_calendar(evento, data_vecchia, nuova_data=None, nuova_ora=No
                 ora_attuale = e['start']['dateTime'][11:16]
                 data_finale = nuova_data if nuova_data else data_attuale
                 ora_finale = nuova_ora if nuova_ora else ora_attuale
-                ora_inizio = datetime.datetime.strptime(ora_finale, "%H:%M")
-                ora_fine = ora_inizio + datetime.timedelta(hours=1)
-                e['start']['dateTime'] = data_finale + "T" + ora_finale + ":00"
-                e['end']['dateTime'] = data_finale + "T" + ora_fine.strftime("%H:%M") + ":00"
+                datetime_inizio_obj = datetime.datetime.strptime(data_finale + " " + ora_finale, "%Y-%m-%d %H:%M")
+                datetime_fine_obj = datetime_inizio_obj + datetime.timedelta(hours=1)
+                e['start']['dateTime'] = datetime_inizio_obj.strftime("%Y-%m-%dT%H:%M:00")
+                e['end']['dateTime'] = datetime_fine_obj.strftime("%Y-%m-%dT%H:%M:00")
             servizio_calendar.events().update(calendarId=ID_CALENDARIO, eventId=e['id'], body=e).execute()
             return "Evento modificato con successo su Calendar!"
     return "Evento non trovato: " + evento + " del " + data_vecchia
@@ -357,10 +357,10 @@ def salva_ricorrente_calendar(persona, attivita, giorno, ora, data_inizio=None, 
         riferimento = datetime.datetime.now() + datetime.timedelta(hours=2)
     giorni_da_aggiungere = (giorno_target - riferimento.weekday()) % 7
     prima_data = riferimento + datetime.timedelta(days=giorni_da_aggiungere)
-    ora_inizio = datetime.datetime.strptime(ora, "%H:%M")
-    ora_fine = ora_inizio + datetime.timedelta(hours=1)
-    datetime_inizio = prima_data.strftime("%Y-%m-%d") + "T" + ora + ":00"
-    datetime_fine = prima_data.strftime("%Y-%m-%d") + "T" + ora_fine.strftime("%H:%M") + ":00"
+    ora_inizio_completo = datetime.datetime.strptime(prima_data.strftime("%Y-%m-%d") + " " + ora, "%Y-%m-%d %H:%M")
+    ora_fine_completo = ora_inizio_completo + datetime.timedelta(hours=1)
+    datetime_inizio = ora_inizio_completo.strftime("%Y-%m-%dT%H:%M:00")
+    datetime_fine = ora_fine_completo.strftime("%Y-%m-%dT%H:%M:00")
     if not data_fine:
         data_fine_obj = riferimento + datetime.timedelta(days=300)
         data_fine = data_fine_obj.strftime("%Y-%m-%d")
@@ -397,7 +397,7 @@ def mostra_ricorrenti_calendar():
         inizio = e['start'].get('dateTime', '')
         ora = inizio[11:16] if inizio else ""
         giorno_testo = ""
-        if e['recurrence']:
+        if e.get('recurrence'):
             regola = e['recurrence'][0]
             for codice, nome_giorno in giorni_rrule_inv.items():
                 if "BYDAY=" + codice in regola:
