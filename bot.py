@@ -118,7 +118,7 @@ def cosa_buttare(giorni_da_oggi=0):
     if giorno_settimana == 1:
         rifiuti.append("carta")
         rifiuti.append("indifferenziata")
-    if giorno_settimana == 0 and not settimana_pari:
+    if giorno_settimana == 0 and settimana_pari:
         rifiuti.append("vetro")
     if giorno_settimana == 3:
         rifiuti.append("plastica")
@@ -157,24 +157,96 @@ def prova_registrazione(messaggio, chat_id, nome_persona):
     return False
 
 # ============================================
-# CONTROLLO SOVRAPPOSIZIONI (eventi singoli + ricorrenti JSON)
+# CONTROLLO SOVRAPPOSIZIONI (legge da Google Calendar, con buffer 30 min)
 # ============================================
+def orari_si_sovrappongono(ora1_inizio, ora1_fine, ora2_inizio, ora2_fine, buffer_minuti=30):
+    def a_minuti(ora_str):
+        h, m = ora_str.split(":")
+        return int(h) * 60 + int(m)
+
+    i1 = a_minuti(ora1_inizio) - buffer_minuti
+    f1 = a_minuti(ora1_fine) + buffer_minuti
+    i2 = a_minuti(ora2_inizio) - buffer_minuti
+    f2 = a_minuti(ora2_fine) + buffer_minuti
+
+    return i1 < f2 and i2 < f1
+
 def controlla_sovrapposizione(persona, data, ora):
+    ora_inizio_nuovo = ora
+    ora_fine_obj = datetime.datetime.strptime(ora, "%H:%M") + datetime.timedelta(hours=1)
+    ora_fine_nuovo = ora_fine_obj.strftime("%H:%M")
+
     conflitti = []
-    with open(FILE_EVENTI, "r") as f:
-        eventi = json.load(f)
-    for e in eventi:
-        if e["data"] == data and e["ora"] == ora:
-            conflitti.append(e["persona"] + ": " + e["evento"] + " (evento singolo)")
-    with open(FILE_RICORRENTI, "r") as f:
-        ricorrenti = json.load(f)
-    giorno_settimana_richiesto = giorno_settimana_di(data)
-    for r in ricorrenti:
-        if r["giorno"] == giorno_settimana_richiesto and r["ora"] == ora:
-            conflitti.append(r["persona"] + ": " + r["attivita"] + " (ricorrente)")
+
+    try:
+        # Controlla eventi singoli su Calendar
+        eventi_result = servizio_calendar.events().list(
+            calendarId=ID_CALENDARIO,
+            timeMin=data + "T00:00:00Z",
+            timeMax=data + "T23:59:59Z",
+            singleEvents=True
+        ).execute()
+        for e in eventi_result.get('items', []):
+            if 'dateTime' in e.get('start', {}):
+                e_ora_inizio = e['start']['dateTime'][11:16]
+                e_ora_fine = e['end']['dateTime'][11:16]
+                if orari_si_sovrappongono(ora_inizio_nuovo, ora_fine_nuovo, e_ora_inizio, e_ora_fine):
+                    conflitti.append(e['summary'] + " (evento)")
+
+        # Controlla ricorrenti su Calendar
+        giorno_richiesto = giorno_settimana_di(data)
+        eventi_ricorrenti = servizio_calendar.events().list(
+            calendarId=ID_CALENDARIO,
+            maxResults=50,
+            singleEvents=False
+        ).execute()
+        giorni_rrule_inv = {"MO": "lunedi", "TU": "martedi", "WE": "mercoledi", "TH": "giovedi", "FR": "venerdi", "SA": "sabato", "SU": "domenica"}
+        for e in eventi_ricorrenti.get('items', []):
+            if 'recurrence' in e and 'dateTime' in e.get('start', {}):
+                e_ora_inizio = e['start']['dateTime'][11:16]
+                e_ora_fine = e['end']['dateTime'][11:16]
+                regola = e['recurrence'][0]
+                for codice, nome_giorno in giorni_rrule_inv.items():
+                    if codice in regola and nome_giorno == giorno_richiesto:
+                        if orari_si_sovrappongono(ora_inizio_nuovo, ora_fine_nuovo, e_ora_inizio, e_ora_fine):
+                            conflitti.append(e['summary'] + " (ricorrente)")
+    except Exception as e:
+        print("Errore controllo sovrapposizione:", str(e))
+
     if len(conflitti) > 0:
-        return "ATTENZIONE: il " + data + " alle " + ora + " ci sono gia questi impegni in famiglia: " + " | ".join(conflitti) + ". Vuoi salvare comunque?"
+        return "ATTENZIONE: il " + data + " alle " + ora + " ci sono gia questi impegni in famiglia (considerando 30 min di margine): " + " | ".join(conflitti) + ". Vuoi salvare comunque?"
     return None
+
+def imposta_alert_personalizzato(nome_evento, minuti_prima, data=None):
+    if data:
+        eventi_result = servizio_calendar.events().list(
+            calendarId=ID_CALENDARIO, timeMin=data + "T00:00:00Z",
+            timeMax=data + "T23:59:59Z", singleEvents=True
+        ).execute()
+        eventi = eventi_result.get('items', [])
+        for e in eventi:
+            if nome_evento.lower() in e['summary'].lower():
+                e['reminders'] = {
+                    'useDefault': False,
+                    'overrides': [{'method': 'popup', 'minutes': minuti_prima}]
+                }
+                servizio_calendar.events().update(calendarId=ID_CALENDARIO, eventId=e['id'], body=e).execute()
+                return "Alert impostato: " + str(minuti_prima) + " minuti prima per " + e['summary']
+        return "Evento non trovato: " + nome_evento + " del " + data
+    else:
+        eventi_result = servizio_calendar.events().list(
+            calendarId=ID_CALENDARIO, maxResults=50, singleEvents=False
+        ).execute()
+        eventi = eventi_result.get('items', [])
+        for e in eventi:
+            if 'recurrence' in e and nome_evento.lower() in e['summary'].lower():
+                e['reminders'] = {
+                    'useDefault': False,
+                    'overrides': [{'method': 'popup', 'minutes': minuti_prima}]
+                }
+                servizio_calendar.events().update(calendarId=ID_CALENDARIO, eventId=e['id'], body=e).execute()
+                return "Alert impostato: " + str(minuti_prima) + " minuti prima per " + e['summary'] + " (ricorrente, si applica a tutte le occorrenze future)"
+        return "Ricorrente non trovato: " + nome_evento
 
 # ============================================
 # TOOLS EVENTI SINGOLI (Google Calendar)
@@ -365,7 +437,8 @@ tools = [
     {"name": "mostra_tutto", "description": "Usa questo tool quando l utente chiede un riepilogo generale di tutto: rifiuti, appuntamenti ricorrenti ed eventi", "input_schema": {"type": "object", "properties": {}, "required": []}},
     {"name": "giorno_settimana_di", "description": "Usa questo tool per scoprire che giorno della settimana cade una data specifica. Usalo SEMPRE prima di salvare un evento per verificare che il giorno della settimana indicato dall utente sia corretto", "input_schema": {"type": "object", "properties": {"data": {"type": "string", "description": "Data in formato YYYY-MM-DD"}}, "required": ["data"]}},
     {"name": "prossima_data_con_giorno_mese", "description": "Usa questo tool per calcolare la data esatta futura (YYYY-MM-DD) di un giorno e mese specifico, quando l utente non specifica l anno", "input_schema": {"type": "object", "properties": {"giorno_mese": {"type": "integer", "description": "Il numero del giorno del mese, es 15"}, "mese": {"type": "integer", "description": "Il numero del mese, es 11 per novembre"}}, "required": ["giorno_mese", "mese"]}},
-    {"name": "modifica_evento_singolo", "description": "Usa questo tool quando l utente vuole correggere/modificare un evento gia esistente (data, ora, nome evento), SENZA cancellare e ricreare. Cambia SOLO i campi specificati dall utente, lascia intatti gli altri", "input_schema": {"type": "object", "properties": {"evento": {"type": "string", "description": "Nome evento attuale, per trovarlo"}, "data_vecchia": {"type": "string", "description": "Data attuale dell evento YYYY-MM-DD, per trovarlo"}, "nuova_data": {"type": "string", "description": "Nuova data, opzionale"}, "nuova_ora": {"type": "string", "description": "Nuova ora, opzionale"}, "nuovo_evento": {"type": "string", "description": "Nuovo nome evento, opzionale"}}, "required": ["evento", "data_vecchia"]}}
+    {"name": "modifica_evento_singolo", "description": "Usa questo tool quando l utente vuole correggere/modificare un evento gia esistente (data, ora, nome evento), SENZA cancellare e ricreare. Cambia SOLO i campi specificati dall utente, lascia intatti gli altri", "input_schema": {"type": "object", "properties": {"evento": {"type": "string", "description": "Nome evento attuale, per trovarlo"}, "data_vecchia": {"type": "string", "description": "Data attuale dell evento YYYY-MM-DD, per trovarlo"}, "nuova_data": {"type": "string", "description": "Nuova data, opzionale"}, "nuova_ora": {"type": "string", "description": "Nuova ora, opzionale"}, "nuovo_evento": {"type": "string", "description": "Nuovo nome evento, opzionale"}}, "required": ["evento", "data_vecchia"]}},
+    {"name": "imposta_alert_personalizzato", "description": "Usa questo tool quando l utente vuole impostare un alert/notifica personalizzato per un evento specifico (singolo o ricorrente), specificando quanti minuti prima vuole essere avvisato. Se l utente dice ore, converti in minuti (es. 2 ore = 120 minuti)", "input_schema": {"type": "object", "properties": {"nome_evento": {"type": "string", "description": "Nome o parte del nome dell evento"}, "minuti_prima": {"type": "integer", "description": "Quanti minuti prima dell evento mandare la notifica"}, "data": {"type": "string", "description": "Data dell evento in formato YYYY-MM-DD, SOLO se e un evento singolo. Omettere per i ricorrenti"}}, "required": ["nome_evento", "minuti_prima"]}}
 ]
 
 # ============================================
@@ -435,6 +508,10 @@ def agente(messaggio, nome_utente="Utente"):
                             inp.get("nuova_data"), inp.get("nuova_ora"),
                             inp.get("nuovo_evento")
                         )
+                    elif nome_tool == "imposta_alert_personalizzato":
+                        risultato = imposta_alert_personalizzato(
+                            inp["nome_evento"], inp["minuti_prima"], inp.get("data")
+                        )
                     elif nome_tool == "salva_ricorrente_familiare":
                         risultato = salva_ricorrente_calendar(
                             inp["persona"], inp["attivita"], inp["giorno"], inp["ora"],
@@ -460,6 +537,43 @@ def agente(messaggio, nome_utente="Utente"):
 
     conversazione.append({"role": "assistant", "content": testo})
     return testo
+
+# ============================================
+# ALERT AUTOMATICO RIFIUTI
+# ============================================
+async def controlla_alert_rifiuti(bot):
+    while True:
+        try:
+            with open(FILE_CONFIG_RIFIUTI, "r") as f:
+                config = json.load(f)
+
+            adesso = datetime.datetime.now() + datetime.timedelta(hours=2)
+            ora_attuale = adesso.strftime("%H:%M")
+            oggi_str = adesso.strftime("%Y-%m-%d")
+
+            ora_target = config["ora_alert"]
+            ultimo_inviato = config.get("ultimo_alert_inviato")
+
+            if ora_attuale >= ora_target and ultimo_inviato != oggi_str:
+                rifiuti = cosa_buttare_oggi()
+                if len(rifiuti) > 0:
+                    testo_rifiuti = ", ".join(rifiuti)
+                    messaggio = "Promemoria rifiuti: oggi si butta " + testo_rifiuti + "!"
+
+                    for cid in get_tutti_chat_ids():
+                        try:
+                            await bot.send_message(chat_id=cid, text=messaggio)
+                        except Exception as e:
+                            print("Errore invio alert rifiuti a", cid, ":", str(e))
+
+                config["ultimo_alert_inviato"] = oggi_str
+                with open(FILE_CONFIG_RIFIUTI, "w") as f:
+                    json.dump(config, f, indent=2)
+
+        except Exception as e:
+            print("Errore controllo alert rifiuti:", str(e))
+
+        await asyncio.sleep(60)
 
 # ============================================
 # DUE BOT TELEGRAM CON NOTIFICA INCROCIATA
@@ -514,6 +628,8 @@ async def main():
     await app2.updater.start_polling(drop_pending_updates=True)
 
     print("Entrambi i bot avviati!")
+
+    asyncio.ensure_future(controlla_alert_rifiuti(app1.bot))
 
     while True:
         await asyncio.sleep(3600)
