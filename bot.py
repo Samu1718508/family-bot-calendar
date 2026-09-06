@@ -391,11 +391,19 @@ def mostra_ricorrenti_calendar():
     ricorrenti = [e for e in eventi if 'recurrence' in e]
     if not ricorrenti:
         return "Nessun appuntamento ricorrente al momento."
+    giorni_rrule_inv = {"MO": "lunedi", "TU": "martedi", "WE": "mercoledi", "TH": "giovedi", "FR": "venerdi", "SA": "sabato", "SU": "domenica"}
     testo = "Appuntamenti ricorrenti:\n"
     for e in ricorrenti:
         inizio = e['start'].get('dateTime', '')
         ora = inizio[11:16] if inizio else ""
-        testo += "- " + e['summary'] + " alle " + ora + "\n"
+        giorno_testo = ""
+        if e['recurrence']:
+            regola = e['recurrence'][0]
+            for codice, nome_giorno in giorni_rrule_inv.items():
+                if "BYDAY=" + codice in regola:
+                    giorno_testo = " ogni " + nome_giorno
+                    break
+        testo += "- " + e['summary'] + giorno_testo + " alle " + ora + "\n"
     return testo
 
 def cancella_ricorrente_calendar(persona, attivita):
