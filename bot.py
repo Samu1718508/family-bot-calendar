@@ -254,6 +254,16 @@ def imposta_alert_personalizzato(nome_evento, minuti_prima, data=None):
 # ============================================
 # TOOLS EVENTI SINGOLI (Google Calendar)
 # ============================================
+COLORI_PERSONE = {
+    "cecilia": "4",   # Flamingo (rosa)
+    "chicco": "5",    # Banana (giallo)
+    "samuele": "7",   # Peacock (azzurro/turchese)
+    "anna": "3"       # Grape (viola)
+}
+
+def colore_di(persona):
+    return COLORI_PERSONE.get(persona.lower())
+
 def salva_evento_singolo_calendar(persona, evento, data, ora, forza=False):
     if not forza:
         conflitto = controlla_sovrapposizione(persona, data, ora)
@@ -276,6 +286,9 @@ def salva_evento_singolo_calendar(persona, evento, data, ora, forza=False):
             ],
         },
     }
+    colore = colore_di(persona)
+    if colore:
+        evento_calendar['colorId'] = colore
     servizio_calendar.events().insert(calendarId=ID_CALENDARIO, body=evento_calendar).execute()
     return persona + ": " + evento + " il " + data + " alle " + ora + " salvato su Calendar!"
 
@@ -380,6 +393,9 @@ def salva_ricorrente_calendar(persona, attivita, giorno, ora, data_inizio=None, 
             ],
         },
     }
+    colore = colore_di(persona)
+    if colore:
+        evento_calendar['colorId'] = colore
     servizio_calendar.events().insert(calendarId=ID_CALENDARIO, body=evento_calendar).execute()
     return persona + ": " + attivita + " ogni " + giorno + " alle " + ora + " dal " + prima_data.strftime("%Y-%m-%d") + " al " + data_fine + " salvato su Calendar!"
 
